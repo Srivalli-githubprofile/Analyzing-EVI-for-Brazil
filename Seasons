@@ -1,0 +1,105 @@
+// Load the boundary of Brazil using the FAO/GAUL/2015/level0 dataset
+var brazil = ee.FeatureCollection("FAO/GAUL/2015/level0").filter(ee.Filter.eq('ADM0_NAME', 'Brazil'));
+
+// Function to acquire MODIS satellite imagery for the specified time frame and region
+var getModisImageCollection = function (startDate, endDate) {
+  return ee.ImageCollection('MODIS/006/MOD13Q1')
+    .select(['sur_refl_b01', 'sur_refl_b02', 'sur_refl_b03'])
+    .filterDate(startDate, endDate)
+    .map(function (image) {
+      return image.clip(brazil);
+    });
+};
+
+// Function to calculate EVI
+var calculateEVI = function (image) {
+  var nir = image.select('sur_refl_b02');
+  var red = image.select('sur_refl_b01');
+  var blue = image.select('sur_refl_b03');
+
+  var evi = nir.subtract(red)
+    .divide(nir.add(red.multiply(6))
+      .subtract(blue.multiply(7.5))
+      .add(1))
+    .multiply(2.5)
+    .rename('EVI');
+
+  return image.addBands(evi);
+};
+
+// Function to clip the EVI results to the boundary of Brazil
+var clipEVItoBrazil = function (image) {
+  return image.clip(brazil);
+};
+
+// Define date ranges for analysis
+var drySeasonStart = '2022-05-01';
+var drySeasonEnd = '2022-08-31';
+var rainySeasonStart = '2022-09-01';
+var rainySeasonEnd = '2022-12-31';
+
+// Acquire MODIS satellite imagery for dry season
+var modisDrySeason = getModisImageCollection(drySeasonStart, drySeasonEnd);
+
+// Acquire MODIS satellite imagery for rainy season
+var modisRainySeason = getModisImageCollection(rainySeasonStart, rainySeasonEnd);
+
+// Apply EVI calculation to the MODIS imagery for both seasons
+var eviDrySeason = modisDrySeason.map(calculateEVI);
+var eviRainySeason = modisRainySeason.map(calculateEVI);
+
+// Clip the EVI results to the boundary of Brazil for both seasons
+var eviDrySeasonBrazil = eviDrySeason.map(clipEVItoBrazil);
+var eviRainySeasonBrazil = eviRainySeason.map(clipEVItoBrazil);
+
+// Visualize the clipped EVI on the map for dry season
+var visParamsDrySeason = { min: 0, max: 1, palette: ['FFFFFF', '00FF00'] };
+Map.centerObject(brazil, 4);
+Map.addLayer(brazil, { color: 'FF0000' }, 'Brazil Boundary');
+Map.addLayer(eviDrySeasonBrazil.select('EVI').mean(), visParamsDrySeason, 'Mean EVI Dry Season');
+
+// Visualize the clipped EVI on the map for rainy season
+var visParamsRainySeason = { min: 0, max: 1, palette: ['FFFFFF', '0000FF'] }; // Adjust the palette to differentiate from dry season
+Map.addLayer(eviRainySeasonBrazil.select('EVI').mean(), visParamsRainySeason, 'Mean EVI Rainy Season');
+
+// Create a time-series graph for dry season
+var chartDrySeason = ui.Chart.image.seriesByRegion({
+  imageCollection: eviDrySeason,
+  regions: brazil,
+  reducer: ee.Reducer.mean(),
+  band: 'EVI',
+  scale: 500,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'EVI Time Series in Brazil (Dry Season)',
+  hAxis: { title: 'Date' },
+  vAxis: { title: 'Mean EVI' }
+});
+
+// Create a time-series graph for rainy season
+var chartRainySeason = ui.Chart.image.seriesByRegion({
+  imageCollection: eviRainySeason,
+  regions: brazil,
+  reducer: ee.Reducer.mean(),
+  band: 'EVI',
+  scale: 500,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'EVI Time Series in Brazil (Rainy Season)',
+  hAxis: { title: 'Date' },
+  vAxis: { title: 'Mean EVI' }
+});
+
+// Display the charts side by side
+var chartPanel = ui.Panel({
+  widgets: [
+    ui.Label('Dry Season', { fontWeight: 'bold' }),
+    chartDrySeason,
+    ui.Label('Rainy Season', { fontWeight: 'bold' }),
+    chartRainySeason
+  ],
+  layout: ui.Panel.Layout.flow('horizontal')
+});
+
+// Add the chart panel to the console
+print(chartPanel);
